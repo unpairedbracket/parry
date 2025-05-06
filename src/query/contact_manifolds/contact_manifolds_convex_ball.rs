@@ -2,6 +2,7 @@ use crate::math::{Isometry, Point, Real, Vector};
 use crate::query::contact_manifolds::{NormalConstraints, NormalConstraintsPair};
 use crate::query::{ContactManifold, Ray, TrackedContact};
 use crate::shape::{Ball, PackedFeatureId, Shape};
+use log::info;
 use na::Unit;
 
 /// Computes the contact manifold between a convex shape and a ball, both represented as a `Shape` trait-object.
@@ -84,8 +85,11 @@ pub fn contact_manifold_convex_ball<'a, ManifoldData, ContactData, S1>(
             &mut local_n2,
         ) {
             // The contact got completely discarded by the normal correction.
+            info!("normal failed");
             manifold.clear();
             return;
+        } else {
+            info!("normal succeeded");
         }
 
         let local_p2 = (local_n2 * ball2.radius).into();
@@ -110,8 +114,10 @@ pub fn contact_manifold_convex_ball<'a, ManifoldData, ContactData, S1>(
                 };
                 fid1 = hit.feature;
             } else {
-                manifold.clear();
-                return;
+                let cosine = local_n2.dot(&uncorrected_local_n2);
+                dist *= cosine;
+                let time_of_impact = if proj.is_inside { -dist } else { dist };
+                local_p1 = ray1.point_at(time_of_impact);
             }
         }
 
@@ -140,6 +146,7 @@ pub fn contact_manifold_convex_ball<'a, ManifoldData, ContactData, S1>(
             manifold.local_n2 = local_n2;
         }
     } else {
+        info!("out of range");
         manifold.clear();
     }
 }
