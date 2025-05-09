@@ -110,8 +110,10 @@ pub fn contact_manifold_convex_ball<'a, ManifoldData, ContactData, S1>(
                 };
                 fid1 = hit.feature;
             } else {
-                manifold.clear();
-                return;
+                let cosine_factor = uncorrected_local_n2.dot(&local_n2);
+                dist *= cosine_factor;
+                let hit_time_of_impact = if proj.is_inside { -dist } else { dist };
+                local_p1 = ray1.point_at(hit_time_of_impact);
             }
         }
 
