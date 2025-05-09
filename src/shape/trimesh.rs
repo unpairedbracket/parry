@@ -73,6 +73,9 @@ pub struct TriMeshPseudoNormals {
     pub vertices_pseudo_normal: Vec<Vector<Real>>,
     /// The pseudo-normals of the edges.
     pub edges_pseudo_normal: Vec<[Vector<Real>; 3]>,
+    /// Are edges convex or concave?
+    /// Concave edges should not contribute to normal constraints in collisions
+    pub edges_convex: Vec<[bool; 3]>,
 }
 
 /// The connected-components of a triangle mesh.
@@ -637,9 +640,9 @@ impl TriMesh {
         let mut vertices_pseudo_normal = vec![Vector::zeros(); self.vertices().len()];
         let mut edges_pseudo_normal = HashMap::default();
         let mut edges_multiplicity = HashMap::default();
+        let vtx = self.vertices();
 
         for idx in self.indices() {
-            let vtx = self.vertices();
             let tri = Triangle::new(
                 vtx[idx[0] as usize],
                 vtx[idx[1] as usize],
@@ -672,6 +675,8 @@ impl TriMesh {
             }
         }
 
+        let mut edges_convex = Vec::with_capacity(self.indices.len());
+
         let edges_pseudo_normal = self
             .indices()
             .iter()
@@ -680,17 +685,29 @@ impl TriMesh {
                 let e1 = SortedPair::new(idx[1], idx[2]);
                 let e2 = SortedPair::new(idx[2], idx[0]);
                 let default = Vector::zeros();
-                [
-                    edges_pseudo_normal.get(&e0).copied().unwrap_or(default),
-                    edges_pseudo_normal.get(&e1).copied().unwrap_or(default),
-                    edges_pseudo_normal.get(&e2).copied().unwrap_or(default),
-                ]
+
+                let pn01 = edges_pseudo_normal.get(&e0).copied().unwrap_or(default);
+                let pn12 = edges_pseudo_normal.get(&e1).copied().unwrap_or(default);
+                let pn20 = edges_pseudo_normal.get(&e2).copied().unwrap_or(default);
+
+                let v0 = vtx[idx[0] as usize];
+                let v1 = vtx[idx[1] as usize];
+                let v2 = vtx[idx[2] as usize];
+
+                edges_convex.push([
+                    pn01.dot(&(v2 - v0)) <= 0.0,
+                    pn12.dot(&(v0 - v1)) <= 0.0,
+                    pn20.dot(&(v1 - v2)) <= 0.0,
+                ]);
+
+                [pn01, pn12, pn20]
             })
             .collect();
 
         self.pseudo_normals = Some(TriMeshPseudoNormals {
             vertices_pseudo_normal,
             edges_pseudo_normal,
+            edges_convex,
         })
     }
 
@@ -1002,17 +1019,27 @@ impl TriMesh {
     pub fn triangle_normal_constraints(&self, i: u32) -> Option<TrianglePseudoNormals> {
         if self.flags.contains(TriMeshFlags::FIX_INTERNAL_EDGES) {
             let triangle = self.triangle(i);
+            let face = triangle.normal()?;
             let pseudo_normals = self.pseudo_normals.as_ref()?;
             let edges_pseudo_normals = pseudo_normals.edges_pseudo_normal[i as usize];
+            let edges_convex = pseudo_normals.edges_convex[i as usize];
+
+            let get_adjusted_normal = |idx| {
+                if edges_convex[idx] {
+                    Unit::try_new(edges_pseudo_normals[idx], 1.0e-6)
+                } else {
+                    Some(face)
+                }
+            };
 
             // TODO: could the pseudo-normal be pre-normalized instead of having to renormalize
             //       every time we need them?
             Some(TrianglePseudoNormals {
-                face: triangle.normal()?,
+                face,
                 edges: [
-                    Unit::try_new(edges_pseudo_normals[0], 1.0e-6)?,
-                    Unit::try_new(edges_pseudo_normals[1], 1.0e-6)?,
-                    Unit::try_new(edges_pseudo_normals[2], 1.0e-6)?,
+                    get_adjusted_normal(0)?,
+                    get_adjusted_normal(1)?,
+                    get_adjusted_normal(2)?,
                 ],
             })
         } else {
